@@ -555,14 +555,8 @@ find_wordpress_sites() {
         return 1
     fi
 
-    # Print the list of WordPress sites
-    echo "Found $count WordPress sites:"
-    for i in "${!sites[@]}"; do
-        echo "$((i + 1)). ${sites[$i]}"
-    done
-
-    # Return the list of sites
-    echo "${sites[@]}"
+    # Return the list of sites as a space-separated string
+    echo "${sites[*]}"
 }
 
 # Function to check if a command exists
@@ -1066,29 +1060,28 @@ configure_settings() {
 
 # Function to select a WordPress site
 select_wordpress_site() {
-    # Find WordPress sites
-    local sites_output=$(find_wordpress_sites)
-    local exit_code=$?
-
-    if [ $exit_code -ne 0 ]; then
-        echo "No WordPress sites found. Please check your installation."
+    # Check if /var/www exists
+    if [ ! -d "/var/www" ]; then
+        echo "ERROR: /var/www directory not found!"
         return 1
     fi
 
-    # Parse the output to get the list of sites
+    # Find WordPress sites directly
     local sites=()
-    while read -r line; do
-        if [[ $line =~ ^[0-9]+\..* ]]; then
-            # Skip the numbered lines
-            continue
-        elif [[ $line == "Found"* ]]; then
-            # Skip the "Found X WordPress sites:" line
-            continue
-        else
-            # Add site to the array
-            sites+=($line)
+
+    # Find directories in /var/www that contain wp-config.php
+    for dir in /var/www/*/; do
+        if [ -e "${dir}wp-config.php" ]; then
+            site=$(basename "$dir")
+            sites+=("$site")
         fi
-    done <<<"$sites_output"
+    done
+
+    # If no WordPress sites found
+    if [ ${#sites[@]} -eq 0 ]; then
+        echo "No WordPress sites found in /var/www"
+        return 1
+    fi
 
     # If only one site is found, select it automatically
     if [ ${#sites[@]} -eq 1 ]; then
@@ -1098,7 +1091,7 @@ select_wordpress_site() {
     fi
 
     # Prompt user to select a site
-    echo "Select a WordPress site:"
+    echo "Found ${#sites[@]} WordPress sites:"
     for i in "${!sites[@]}"; do
         echo "$((i + 1)). ${sites[$i]}"
     done
