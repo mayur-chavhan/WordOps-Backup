@@ -695,8 +695,8 @@ incremental_backup() {
     log_message "Starting incremental backup for $site..."
     mkdir -p "$backup_dir"
 
-    # Find the most recent full backup
-    last_full_backup=$(find "$BACKUP_DIR/$site" -maxdepth 1 -type d -name "[0-9]*" | sort -r | head -n 1)
+    # Find the most recent full backup (excluding db-only backups)
+    last_full_backup=$(find "$BACKUP_DIR/$site" -maxdepth 1 -type d -name "[0-9]*" | grep -v "\-db$" | sort -r | head -n 1)
 
     if [ -z "$last_full_backup" ]; then
         log_message "No full backup found. Performing full backup instead..."
@@ -942,11 +942,11 @@ configure_settings() {
                 echo "==========================="
                 read -p "Enter ntfy URL [$NTFY_URL]: " new_ntfy_url
                 read -p "Enter ntfy Topic [$NTFY_TOPIC]: " new_ntfy_topic
-                read -p "Enter ntfy Priority (min/low/default/high/urgent) [$NTFY_PRIORITY]: " new_ntfy_priority
+                read -p "Enter ntfy Priority [min/low/default/high/urgent]: " new_ntfy_priority
                 read -p "Enter ntfy Tags [$NTFY_TAGS]: " new_ntfy_tags
 
                 if [ -n "$new_ntfy_url" ]; then
-                    sed -i "s|NTFY_URL=\".*\"|NTFY_URL=\"$new_ntfy_url\"|" "$CONFIG_FILE"
+                    sed -i "s | NTFY_URL=\".*\" | NTFY_URL=\"$new_ntfy_url\" | " "$CONFIG_FILE"
                 fi
 
                 if [ -n "$new_ntfy_topic" ]; then
@@ -991,7 +991,7 @@ configure_settings() {
                 echo
                 echo "Configure SMTP Notifications"
                 echo "==========================="
-                read -p "Enter SMTP Server (e.g., smtp.gmail.com:587) [$SMTP_SERVER]: " new_smtp_server
+                read -p "Enter SMTP Server [example: smtp.gmail.com:587]: " new_smtp_server
                 read -p "Enter SMTP Username [$SMTP_USER]: " new_smtp_user
                 read -p "Enter SMTP Password [$SMTP_PASSWORD]: " new_smtp_password
                 read -p "Enter From Email Address [$SMTP_FROM]: " new_smtp_from
@@ -1088,7 +1088,7 @@ select_wordpress_site() {
             # Add site to the array
             sites+=($line)
         fi
-    done <<< "$sites_output"
+    done <<<"$sites_output"
 
     # If only one site is found, select it automatically
     if [ ${#sites[@]} -eq 1 ]; then
