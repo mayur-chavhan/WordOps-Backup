@@ -86,10 +86,16 @@ EOL
 fi
 
 # Check if Telegram notification is enabled but credentials are missing
+# Only prompt for credentials on first run if they're missing
 if [ "$NOTIFICATION_TYPE" = "telegram" ] || [ "$NOTIFICATION_TYPE" = "all" ]; then
+    # Load from config file first to check if they were previously set
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+    fi
+
     if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
         echo "Telegram notifications are enabled but credentials are missing."
-        echo "Please configure your Telegram bot:"
+        echo "Please configure your Telegram bot (one-time setup):"
 
         if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
             read -p "Enter your Telegram Bot Token: " new_token
@@ -607,9 +613,18 @@ full_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
-    # Fix for mysqldump deprecation warning
-    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
-    wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
+    # Get DB credentials from wp-config.php
+    local DB_PASSWORD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
+
+    # Use wp db export directly
+    log_message "Using wp db export for database backup"
+    export MYSQL_PWD="$DB_PASSWORD" # Export password for wp-cli if needed
+    if ! wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root; then
+        log_message "ERROR: wp db export failed for $site"
+        # Optionally handle the error, e.g., exit or send error notification
+        # send_notification "Database backup FAILED for $site" "error" "$site" "$backup_dir"
+        # return 1 # Or exit 1 depending on desired behavior
+    fi
 
     # Compress database dump
     if [ "$COMPRESSION" = "zstd" ]; then
@@ -650,9 +665,18 @@ db_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
-    # Fix for mysqldump deprecation warning
-    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
-    wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
+    # Get DB credentials from wp-config.php
+    local DB_PASSWORD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
+
+    # Use wp db export directly
+    log_message "Using wp db export for database backup"
+    export MYSQL_PWD="$DB_PASSWORD" # Export password for wp-cli if needed
+    if ! wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root; then
+        log_message "ERROR: wp db export failed for $site"
+        # Optionally handle the error
+        # send_notification "Database backup FAILED for $site" "error" "$site" "$backup_dir"
+        # return 1
+    fi
 
     # Compress database dump
     if [ "$COMPRESSION" = "zstd" ]; then
@@ -730,9 +754,18 @@ incremental_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
-    # Fix for mysqldump deprecation warning
-    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
-    wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
+    # Get DB credentials from wp-config.php
+    local DB_PASSWORD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
+
+    # Use wp db export directly
+    log_message "Using wp db export for database backup"
+    export MYSQL_PWD="$DB_PASSWORD" # Export password for wp-cli if needed
+    if ! wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root; then
+        log_message "ERROR: wp db export failed for $site"
+        # Optionally handle the error
+        # send_notification "Database backup FAILED for $site" "error" "$site" "$backup_dir"
+        # return 1
+    fi
 
     # Compress database dump
     if [ "$COMPRESSION" = "zstd" ]; then
@@ -1132,27 +1165,97 @@ show_menu() {
 
     case $choice in
     1)
-        site=$(select_wordpress_site)
-        if [ $? -eq 0 ] && check_wordpress "$site"; then
-            full_backup "$site"
+        echo "Performing full backup (files + database)"
+        echo "========================================"
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            echo "No WordPress sites found."
+            read -p "Press Enter to continue..."
+            show_menu
+            return
+        fi
+
+        # Display available sites
+        echo "Available WordPress sites:"
+        site_array=($sites)
+        for i in "${!site_array[@]}"; do
+            echo "$((i + 1)). ${site_array[$i]}"
+        done
+
+        # Prompt for site selection
+        read -p "Select site number [1-${#site_array[@]}]: " site_num
+        if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+            site="${site_array[$((site_num - 1))]}"
+            if check_wordpress "$site"; then
+                full_backup "$site"
+            fi
+        else
+            echo "Invalid selection."
         fi
         read -p "Press Enter to continue..."
         show_menu
         ;;
     2)
-        site=$(select_wordpress_site)
-        if [ $? -eq 0 ] && check_wordpress "$site"; then
-            # Fix for mysqldump deprecation warning
-            export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
-            db_backup "$site"
+        echo "Performing database-only backup"
+        echo "=============================="
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            echo "No WordPress sites found."
+            read -p "Press Enter to continue..."
+            show_menu
+            return
+        fi
+
+        # Display available sites
+        echo "Available WordPress sites:"
+        site_array=($sites)
+        for i in "${!site_array[@]}"; do
+            echo "$((i + 1)). ${site_array[$i]}"
+        done
+
+        # Prompt for site selection
+        read -p "Select site number [1-${#site_array[@]}]: " site_num
+        if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+            site="${site_array[$((site_num - 1))]}"
+            if check_wordpress "$site"; then
+                db_backup "$site"
+            fi
+        else
+            echo "Invalid selection."
         fi
         read -p "Press Enter to continue..."
         show_menu
         ;;
     3)
-        site=$(select_wordpress_site)
-        if [ $? -eq 0 ] && check_wordpress "$site"; then
-            incremental_backup "$site"
+        echo "Performing incremental backup"
+        echo "============================"
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            echo "No WordPress sites found."
+            read -p "Press Enter to continue..."
+            show_menu
+            return
+        fi
+
+        # Display available sites
+        echo "Available WordPress sites:"
+        site_array=($sites)
+        for i in "${!site_array[@]}"; do
+            echo "$((i + 1)). ${site_array[$i]}"
+        done
+
+        # Prompt for site selection
+        read -p "Select site number [1-${#site_array[@]}]: " site_num
+        if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+            site="${site_array[$((site_num - 1))]}"
+            if check_wordpress "$site"; then
+                incremental_backup "$site"
+            fi
+        else
+            echo "Invalid selection."
         fi
         read -p "Press Enter to continue..."
         show_menu
@@ -1160,9 +1263,67 @@ show_menu() {
     4)
         echo "Set up scheduled backups"
         echo "========================"
-        site=$(select_wordpress_site)
-        if [ $? -eq 0 ] && check_wordpress "$site"; then
-            echo "Select backup type:"
+        echo "1. Schedule backup for a specific site"
+        echo "2. Schedule backup for all sites"
+        read -p "Enter your choice [1-2]: " schedule_choice
+
+        case $schedule_choice in
+        1)
+            # Get list of WordPress sites
+            sites=$(find_wordpress_sites)
+            if [ $? -ne 0 ]; then
+                echo "No WordPress sites found."
+                read -p "Press Enter to continue..."
+                show_menu
+                return
+            fi
+
+            # Display available sites
+            echo "Available WordPress sites:"
+            site_array=($sites)
+            for i in "${!site_array[@]}"; do
+                echo "$((i + 1)). ${site_array[$i]}"
+            done
+
+            # Prompt for site selection
+            read -p "Select site number [1-${#site_array[@]}]: " site_num
+            if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+                site="${site_array[$((site_num - 1))]}"
+                if check_wordpress "$site"; then
+                    echo "Select backup type:"
+                    echo "1. Full backup"
+                    echo "2. Database-only backup"
+                    echo "3. Incremental backup"
+                    read -p "Enter your choice [1-3]: " backup_type_choice
+
+                    echo "Enter cron schedule (e.g., '0 2 * * *' for daily at 2 AM):"
+                    read -p "Schedule: " schedule
+
+                    case $backup_type_choice in
+                    1) setup_cron "$site" "full" "$schedule" ;;
+                    2) setup_cron "$site" "db" "$schedule" ;;
+                    3) setup_cron "$site" "incremental" "$schedule" ;;
+                    *) echo "Invalid choice" ;;
+                    esac
+                fi
+            else
+                echo "Invalid selection."
+            fi
+            ;;
+        2)
+            # Get list of WordPress sites
+            sites=$(find_wordpress_sites)
+            if [ $? -ne 0 ]; then
+                echo "No WordPress sites found."
+                read -p "Press Enter to continue..."
+                show_menu
+                return
+            fi
+
+            # Convert space-separated string to array
+            IFS=' ' read -r -a site_array <<<"$sites"
+
+            echo "Select backup type for all sites:"
             echo "1. Full backup"
             echo "2. Database-only backup"
             echo "3. Incremental backup"
@@ -1171,13 +1332,27 @@ show_menu() {
             echo "Enter cron schedule (e.g., '0 2 * * *' for daily at 2 AM):"
             read -p "Schedule: " schedule
 
-            case $backup_type_choice in
-            1) setup_cron "$site" "full" "$schedule" ;;
-            2) setup_cron "$site" "db" "$schedule" ;;
-            3) setup_cron "$site" "incremental" "$schedule" ;;
-            *) echo "Invalid choice" ;;
-            esac
-        fi
+            # Validate backup type choice
+            if [[ "$backup_type_choice" =~ ^[1-3]$ ]]; then
+                echo "Setting up scheduled backups for all sites..."
+                for site in "${site_array[@]}"; do
+                    if check_wordpress "$site"; then
+                        case $backup_type_choice in
+                        1) setup_cron "$site" "full" "$schedule" ;;
+                        2) setup_cron "$site" "db" "$schedule" ;;
+                        3) setup_cron "$site" "incremental" "$schedule" ;;
+                        esac
+                    fi
+                done
+                echo "Scheduled backups set up for all sites."
+            else
+                echo "Invalid choice"
+            fi
+            ;;
+        *)
+            echo "Invalid choice"
+            ;;
+        esac
         read -p "Press Enter to continue..."
         show_menu
         ;;
@@ -1187,10 +1362,62 @@ show_menu() {
         show_menu
         ;;
     6)
-        site=$(select_wordpress_site)
-        if [ $? -eq 0 ] && check_wordpress "$site"; then
-            cleanup_backups "$site"
-        fi
+        echo "Clean up old backups"
+        echo "===================="
+        echo "1. Clean up a specific site"
+        echo "2. Clean up all sites"
+        read -p "Enter your choice [1-2]: " cleanup_choice
+
+        case $cleanup_choice in
+        1)
+            # Get list of WordPress sites
+            sites=$(find_wordpress_sites)
+            if [ $? -ne 0 ]; then
+                echo "No WordPress sites found."
+                read -p "Press Enter to continue..."
+                show_menu
+                return
+            fi
+
+            # Display available sites
+            echo "Available WordPress sites:"
+            site_array=($sites)
+            for i in "${!site_array[@]}"; do
+                echo "$((i + 1)). ${site_array[$i]}"
+            done
+
+            # Prompt for site selection
+            read -p "Select site number [1-${#site_array[@]}]: " site_num
+            if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+                site="${site_array[$((site_num - 1))]}"
+                if check_wordpress "$site"; then
+                    cleanup_backups "$site"
+                fi
+            else
+                echo "Invalid selection."
+            fi
+            ;;
+        2)
+            # Get list of WordPress sites
+            sites=$(find_wordpress_sites)
+            if [ $? -ne 0 ]; then
+                echo "No WordPress sites found."
+            else
+                # Convert space-separated string to array
+                IFS=' ' read -r -a site_array <<<"$sites"
+                echo "Cleaning up old backups for all sites..."
+                for site in "${site_array[@]}"; do
+                    if check_wordpress "$site"; then
+                        cleanup_backups "$site"
+                    fi
+                done
+                echo "Cleanup completed for all sites."
+            fi
+            ;;
+        *)
+            echo "Invalid choice"
+            ;;
+        esac
         read -p "Press Enter to continue..."
         show_menu
         ;;
@@ -1227,8 +1454,6 @@ if [ $# -gt 0 ]; then
         fi
 
         if check_wordpress "$2"; then
-            # Fix for mysqldump deprecation warning
-            export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$2/wp-config.php)"
             db_backup "$2"
             cleanup_backups "$2"
         fi
@@ -1244,6 +1469,154 @@ if [ $# -gt 0 ]; then
             cleanup_backups "$2"
         fi
         ;;
+    --cleanup)
+        if [ -z "$2" ]; then
+            log_message "ERROR: No domain specified for cleanup"
+            exit 1
+        fi
+
+        if check_wordpress "$2"; then
+            cleanup_backups "$2"
+        fi
+        ;;
+    --cleanup-all)
+        log_message "Cleaning up old backups for all sites..."
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            log_message "No WordPress sites found."
+            exit 1
+        fi
+
+        # Convert space-separated string to array
+        IFS=' ' read -r -a site_array <<<"$sites"
+        for site in "${site_array[@]}"; do
+            if check_wordpress "$site"; then
+                cleanup_backups "$site"
+            fi
+        done
+        log_message "Cleanup completed for all sites."
+        ;;
+    --schedule-full)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing schedule or domain for full backup scheduling"
+            log_message "Usage: $0 --schedule-full SCHEDULE DOMAIN"
+            exit 1
+        fi
+
+        schedule="$2"
+        site="$3"
+
+        if check_wordpress "$site"; then
+            setup_cron "$site" "full" "$schedule"
+        fi
+        ;;
+    --schedule-db)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing schedule or domain for database backup scheduling"
+            log_message "Usage: $0 --schedule-db SCHEDULE DOMAIN"
+            exit 1
+        fi
+
+        schedule="$2"
+        site="$3"
+
+        if check_wordpress "$site"; then
+            setup_cron "$site" "db" "$schedule"
+        fi
+        ;;
+    --schedule-inc)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing schedule or domain for incremental backup scheduling"
+            log_message "Usage: $0 --schedule-inc SCHEDULE DOMAIN"
+            exit 1
+        fi
+
+        schedule="$2"
+        site="$3"
+
+        if check_wordpress "$site"; then
+            setup_cron "$site" "incremental" "$schedule"
+        fi
+        ;;
+    --schedule-full-all)
+        if [ -z "$2" ]; then
+            log_message "ERROR: Missing schedule for full backup scheduling"
+            log_message "Usage: $0 --schedule-full-all SCHEDULE"
+            exit 1
+        fi
+
+        schedule="$2"
+
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            log_message "No WordPress sites found."
+            exit 1
+        fi
+
+        # Convert space-separated string to array
+        IFS=' ' read -r -a site_array <<<"$sites"
+        log_message "Setting up scheduled full backups for all sites..."
+        for site in "${site_array[@]}"; do
+            if check_wordpress "$site"; then
+                setup_cron "$site" "full" "$schedule"
+            fi
+        done
+        log_message "Scheduled full backups set up for all sites."
+        ;;
+    --schedule-db-all)
+        if [ -z "$2" ]; then
+            log_message "ERROR: Missing schedule for database backup scheduling"
+            log_message "Usage: $0 --schedule-db-all SCHEDULE"
+            exit 1
+        fi
+
+        schedule="$2"
+
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            log_message "No WordPress sites found."
+            exit 1
+        fi
+
+        # Convert space-separated string to array
+        IFS=' ' read -r -a site_array <<<"$sites"
+        log_message "Setting up scheduled database backups for all sites..."
+        for site in "${site_array[@]}"; do
+            if check_wordpress "$site"; then
+                setup_cron "$site" "db" "$schedule"
+            fi
+        done
+        log_message "Scheduled database backups set up for all sites."
+        ;;
+    --schedule-inc-all)
+        if [ -z "$2" ]; then
+            log_message "ERROR: Missing schedule for incremental backup scheduling"
+            log_message "Usage: $0 --schedule-inc-all SCHEDULE"
+            exit 1
+        fi
+
+        schedule="$2"
+
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            log_message "No WordPress sites found."
+            exit 1
+        fi
+
+        # Convert space-separated string to array
+        IFS=' ' read -r -a site_array <<<"$sites"
+        log_message "Setting up scheduled incremental backups for all sites..."
+        for site in "${site_array[@]}"; do
+            if check_wordpress "$site"; then
+                setup_cron "$site" "incremental" "$schedule"
+            fi
+        done
+        log_message "Scheduled incremental backups set up for all sites."
+        ;;
     --help)
         echo "Usage: $0 [OPTION] [DOMAIN]"
         echo
@@ -1251,6 +1624,14 @@ if [ $# -gt 0 ]; then
         echo "  --full DOMAIN        Perform full backup for DOMAIN"
         echo "  --db DOMAIN          Perform database-only backup for DOMAIN"
         echo "  --incremental DOMAIN Perform incremental backup for DOMAIN"
+        echo "  --cleanup DOMAIN     Clean up old backups for DOMAIN"
+        echo "  --cleanup-all        Clean up old backups for all sites"
+        echo "  --schedule-full SCHEDULE DOMAIN    Schedule full backup for DOMAIN"
+        echo "  --schedule-db SCHEDULE DOMAIN      Schedule database backup for DOMAIN"
+        echo "  --schedule-inc SCHEDULE DOMAIN     Schedule incremental backup for DOMAIN"
+        echo "  --schedule-full-all SCHEDULE       Schedule full backup for all sites"
+        echo "  --schedule-db-all SCHEDULE         Schedule database backup for all sites"
+        echo "  --schedule-inc-all SCHEDULE        Schedule incremental backup for all sites"
         echo "  --help               Display this help message"
         echo
         echo "Without options, the script will display an interactive menu."
