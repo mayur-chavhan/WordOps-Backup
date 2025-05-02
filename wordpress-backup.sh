@@ -85,6 +85,32 @@ PARALLEL_COMPRESSION=$PARALLEL_COMPRESSION
 EOL
 fi
 
+# Check if Telegram notification is enabled but credentials are missing
+if [ "$NOTIFICATION_TYPE" = "telegram" ] || [ "$NOTIFICATION_TYPE" = "all" ]; then
+    if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        echo "Telegram notifications are enabled but credentials are missing."
+        echo "Please configure your Telegram bot:"
+
+        if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            read -p "Enter your Telegram Bot Token: " new_token
+            if [ -n "$new_token" ]; then
+                TELEGRAM_BOT_TOKEN="$new_token"
+                sed -i "s/TELEGRAM_BOT_TOKEN=\".*\"/TELEGRAM_BOT_TOKEN=\"$new_token\"/" "$CONFIG_FILE"
+            fi
+        fi
+
+        if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            read -p "Enter your Telegram Chat ID: " new_chat_id
+            if [ -n "$new_chat_id" ]; then
+                TELEGRAM_CHAT_ID="$new_chat_id"
+                sed -i "s/TELEGRAM_CHAT_ID=\".*\"/TELEGRAM_CHAT_ID=\"$new_chat_id\"/" "$CONFIG_FILE"
+            fi
+        fi
+
+        echo "Telegram configuration updated."
+    fi
+fi
+
 # Load configuration
 source "$CONFIG_FILE"
 
@@ -503,6 +529,42 @@ check_wordpress() {
     return 0
 }
 
+# Function to find WordPress sites in /var/www
+find_wordpress_sites() {
+    local sites=()
+    local count=0
+
+    # Check if /var/www exists
+    if [ ! -d "/var/www" ]; then
+        log_message "ERROR: /var/www directory not found!"
+        return 1
+    fi
+
+    # Find directories in /var/www that contain wp-config.php
+    for dir in /var/www/*/; do
+        if [ -e "${dir}wp-config.php" ]; then
+            site=$(basename "$dir")
+            sites+=("$site")
+            count=$((count + 1))
+        fi
+    done
+
+    # If no WordPress sites found
+    if [ $count -eq 0 ]; then
+        log_message "No WordPress sites found in /var/www"
+        return 1
+    fi
+
+    # Print the list of WordPress sites
+    echo "Found $count WordPress sites:"
+    for i in "${!sites[@]}"; do
+        echo "$((i + 1)). ${sites[$i]}"
+    done
+
+    # Return the list of sites
+    echo "${sites[@]}"
+}
+
 # Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
@@ -551,6 +613,8 @@ full_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
+    # Fix for mysqldump deprecation warning
+    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
     wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
 
     # Compress database dump
@@ -592,6 +656,8 @@ db_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
+    # Fix for mysqldump deprecation warning
+    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
     wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
 
     # Compress database dump
@@ -670,6 +736,8 @@ incremental_backup() {
     log_message "Backing up WordPress database..."
     db_start_time=$(date +%s)
     cd "$site_path" || exit
+    # Fix for mysqldump deprecation warning
+    export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
     wp db export "$backup_dir/$DATEFORM-$site.sql" --allow-root
 
     # Compress database dump
@@ -759,6 +827,7 @@ configure_settings() {
     echo "Compression level: $COMPRESSION_LEVEL"
     echo "Notifications enabled: $ENABLE_NOTIFICATIONS"
     echo "Notification type: $NOTIFICATION_TYPE"
+    echo "========================="
     echo
 
     read -p "Enter backup directory [$BACKUP_DIR]: " new_backup_dir
@@ -832,13 +901,15 @@ configure_settings() {
             "smtp")
                 echo
                 echo "Configure SMTP Notifications"
-                echo "==========================="
+                echo "======================================="
                 read -p "Enter SMTP Server (e.g., smtp.gmail.com:587) [$SMTP_SERVER]: " new_smtp_server
                 read -p "Enter SMTP Username [$SMTP_USER]: " new_smtp_user
                 read -p "Enter SMTP Password [$SMTP_PASSWORD]: " new_smtp_password
                 read -p "Enter From Email Address [$SMTP_FROM]: " new_smtp_from
                 read -p "Enter To Email Address [$SMTP_TO]: " new_smtp_to
                 read -p "Enter Email Subject Prefix [$SMTP_SUBJECT_PREFIX]: " new_smtp_subject_prefix
+                echo ========================================"
+
 
                 if [ -n "$new_smtp_server" ]; then
                     sed -i "s/SMTP_SERVER=\".*\"/SMTP_SERVER=\"$new_smtp_server\"/" "$CONFIG_FILE"
@@ -926,6 +997,7 @@ configure_settings() {
                 read -p "Enter From Email Address [$SMTP_FROM]: " new_smtp_from
                 read -p "Enter To Email Address [$SMTP_TO]: " new_smtp_to
                 read -p "Enter Email Subject Prefix [$SMTP_SUBJECT_PREFIX]: " new_smtp_subject_prefix
+                echo ========================================"
 
                 if [ -n "$new_smtp_server" ]; then
                     sed -i "s/SMTP_SERVER=\".*\"/SMTP_SERVER=\"$new_smtp_server\"/" "$CONFIG_FILE"
@@ -992,11 +1064,68 @@ configure_settings() {
     source "$CONFIG_FILE"
 }
 
+# Function to select a WordPress site
+select_wordpress_site() {
+    # Find WordPress sites
+    local sites_output=$(find_wordpress_sites)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        echo "No WordPress sites found. Please check your installation."
+        return 1
+    fi
+
+    # Parse the output to get the list of sites
+    local sites=()
+    while read -r line; do
+        if [[ $line =~ ^[0-9]+\..* ]]; then
+            # Skip the numbered lines
+            continue
+        elif [[ $line == "Found"* ]]; then
+            # Skip the "Found X WordPress sites:" line
+            continue
+        else
+            # Add site to the array
+            sites+=($line)
+        fi
+    done <<< "$sites_output"
+
+    # If only one site is found, select it automatically
+    if [ ${#sites[@]} -eq 1 ]; then
+        echo "Automatically selected the only available site: ${sites[0]}"
+        echo "${sites[0]}"
+        return 0
+    fi
+
+    # Prompt user to select a site
+    echo "Select a WordPress site:"
+    for i in "${!sites[@]}"; do
+        echo "$((i + 1)). ${sites[$i]}"
+    done
+
+    local valid_selection=false
+    local selection
+
+    while [ "$valid_selection" = false ]; do
+        read -p "Enter site number [1-${#sites[@]}]: " selection
+
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#sites[@]}" ]; then
+            valid_selection=true
+        else
+            echo "Invalid selection. Please enter a number between 1 and ${#sites[@]}."
+        fi
+    done
+
+    # Return the selected site
+    echo "${sites[$((selection - 1))]}"
+    return 0
+}
+
 # Function to display the main menu
 show_menu() {
     clear
-    echo "WordOps WordPress Backup System"
-    echo "==============================="
+    echo "WordOps | WordPress Backup Script Menu | Author : Mayur G. Chavhan"
+    echo "==================================================================="
     echo "1. Perform full backup (files + database)"
     echo "2. Perform database-only backup"
     echo "3. Perform incremental backup"
@@ -1004,29 +1133,32 @@ show_menu() {
     echo "5. Configure backup settings"
     echo "6. Clean up old backups"
     echo "7. Exit"
+    echo "==================================================================="
     echo
     read -p "Enter your choice [1-7]: " choice
 
     case $choice in
     1)
-        read -p "Enter domain name: " site
-        if check_wordpress "$site"; then
+        site=$(select_wordpress_site)
+        if [ $? -eq 0 ] && check_wordpress "$site"; then
             full_backup "$site"
         fi
         read -p "Press Enter to continue..."
         show_menu
         ;;
     2)
-        read -p "Enter domain name: " site
-        if check_wordpress "$site"; then
+        site=$(select_wordpress_site)
+        if [ $? -eq 0 ] && check_wordpress "$site"; then
+            # Fix for mysqldump deprecation warning
+            export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$site/wp-config.php)"
             db_backup "$site"
         fi
         read -p "Press Enter to continue..."
         show_menu
         ;;
     3)
-        read -p "Enter domain name: " site
-        if check_wordpress "$site"; then
+        site=$(select_wordpress_site)
+        if [ $? -eq 0 ] && check_wordpress "$site"; then
             incremental_backup "$site"
         fi
         read -p "Press Enter to continue..."
@@ -1035,8 +1167,8 @@ show_menu() {
     4)
         echo "Set up scheduled backups"
         echo "========================"
-        read -p "Enter domain name: " site
-        if check_wordpress "$site"; then
+        site=$(select_wordpress_site)
+        if [ $? -eq 0 ] && check_wordpress "$site"; then
             echo "Select backup type:"
             echo "1. Full backup"
             echo "2. Database-only backup"
@@ -1062,8 +1194,8 @@ show_menu() {
         show_menu
         ;;
     6)
-        read -p "Enter domain name: " site
-        if check_wordpress "$site"; then
+        site=$(select_wordpress_site)
+        if [ $? -eq 0 ] && check_wordpress "$site"; then
             cleanup_backups "$site"
         fi
         read -p "Press Enter to continue..."
@@ -1102,6 +1234,8 @@ if [ $# -gt 0 ]; then
         fi
 
         if check_wordpress "$2"; then
+            # Fix for mysqldump deprecation warning
+            export MYSQL_PWD="$(grep -oP "(?<=DB_PASSWORD', ')[^']+" /var/www/$2/wp-config.php)"
             db_backup "$2"
             cleanup_backups "$2"
         fi
