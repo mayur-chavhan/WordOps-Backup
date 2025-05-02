@@ -1,0 +1,58 @@
+# Environment variables and sensitive information
+.env
+*.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Backup files
+*.tar.gz
+*.tar.zst
+*.gz
+*.zst
+*.zip
+*.sql
+*.sql.gz
+*.sql.zst
+*.bak
+*.backup
+
+# Log files
+*.log
+logs/
+
+# Configuration files that might contain sensitive information
+backup-config.conf
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+.directory
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+.factorypath
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup directories
+/backups/
+/var/backups/
+/tmp/backups/

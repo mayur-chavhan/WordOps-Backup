@@ -1,0 +1,58 @@
+# WordPress Backup Exclusions
+
+# Backup plugin files
+*.jpa
+*.wpress
+*.zip
+*.gz
+*.bz2
+*.7z
+*.tar
+com_akeeba/backup/*
+backupbuddy_backups/*
+wp-content/updraft/*
+wp-content/backups/*
+wp-content/ai1wm-backups/*
+wp-content/uploads/backupbuddy_backups/*
+wp-content/backup-guard/*
+wp-content/backup/*
+wp-content/uploads/snapshots/*
+wp-content/managewp/backups/*
+wp-content/plugins/wp-clone/backups/*
+
+# Cache files
+wp-content/uploads/wpcf7_captcha/*
+wp-content/widget-cache/*
+wp-content/cache/*
+wp-content/advanced-cache.php
+wp-content/object-cache.php
+wp-content/plugins/madara-core/extract/temp/*
+wp-content/plugins/wp-rocket/cache/*
+wp-content/plugins/wp-super-cache/cache/*
+wp-content/plugins/litespeed-cache/data/*
+wp-content/plugins/w3-total-cache/cache/*
+wp-content/uploads/cache/*
+wp-content/uploads/wp-rocket-config/*
+wp-content/uploads/wc-logs/*
+wp-content/uploads/wp-migrate-db/*
+wp-content/debug.log
+wp-content/uploads/sucuri/*
+wptsc-cachedir/*
+
+# Temporary files
+wp-content/upgrade/*
+wp-content/uploads/gravity_forms/tmp/*
+wp-content/uploads/wp-staging/*
+wp-content/uploads/elementor/css/*
+wp-content/uploads/elementor/tmp/*
+wp-content/uploads/fusion-builder-avada-pages/*
+wp-content/uploads/fusion-elements/*
+wp-content/uploads/fusion-styles/*
+wp-content/uploads/siteorigin-widgets/*
+
+# Large media files (optional)
+# wp-content/uploads/*.mp4
+# wp-content/uploads/*.mov
+# wp-content/uploads/*.avi
+# wp-content/uploads/*.wmv
+# wp-content/uploads/*.webm
