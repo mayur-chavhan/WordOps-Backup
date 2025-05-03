@@ -1,4 +1,4 @@
-# WordOps WordPress Backup Script
+# WordOps | WordPress Backup Script
 
 A comprehensive backup solution for WordPress sites managed with WordOps. This script provides an easy-to-use interface for creating, managing, and scheduling backups with advanced features like incremental backups, compression options, and multiple notification methods.
 
@@ -86,7 +86,8 @@ This will display a menu with the following options:
 4. Set up scheduled backups
 5. Configure backup settings
 6. Clean up old backups
-7. Exit
+7. Restore backup
+8. Exit
 
 ### Command-Line Mode
 
@@ -282,23 +283,6 @@ The script is designed to be easily customizable and extensible. Here are some k
 - `format_duration()`: Formats time duration in human-readable format
 - `format_size()`: Formats file size in human-readable format
 
-### Adding New Features
-
-To add new features:
-
-1. Add any new configuration variables to the top section
-2. Implement your feature as a function
-3. Update the menu system or command-line interface as needed
-
-### Adding New Notification Methods
-
-To add a new notification method:
-
-1. Add configuration variables for the new method in the top section
-2. Create a new notification function (e.g., `send_new_method_notification()`)
-3. Update the `send_notification()` function to include your new method
-4. Update the `configure_settings()` function to allow configuration of your new method
-
 ## Troubleshooting
 
 ### Common Issues
@@ -346,7 +330,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
   - Scheduled backups via cron
   - Automatic cleanup of old backups
 
-## Credits
+## Author & Version
 
 - **Author**: Mayur Chavhan - [GitHub](https://github.com/mayur-chavhan)
 - **Version**: 1.1.0
