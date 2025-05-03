@@ -2,7 +2,7 @@
 
 A comprehensive backup solution for WordPress sites managed with WordOps. This script provides an easy-to-use interface for creating, managing, and scheduling backups with advanced features like incremental backups, compression options, and multiple notification methods.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
@@ -12,6 +12,7 @@ A comprehensive backup solution for WordPress sites managed with WordOps. This s
   - Full backup (files + database)
   - Database-only backup
   - Incremental backup (only changed files since last full backup)
+  - Restore functionality for all backup types
 
 - **Advanced Compression**:
 
@@ -24,6 +25,7 @@ A comprehensive backup solution for WordPress sites managed with WordOps. This s
   - Configurable retention period
   - Automatic cleanup of old backups
   - Scheduled backups via cron
+  - Batch operations for all sites at once
 
 - **Multiple Notification Methods**:
 
@@ -37,6 +39,7 @@ A comprehensive backup solution for WordPress sites managed with WordOps. This s
   - Interactive menu system
   - Command-line interface for automation
   - Detailed logging
+  - Backup restore functionality with multiple options
 
 ## Requirements
 
@@ -101,6 +104,24 @@ For automation or scripting, you can use the command-line interface:
 
 # Display help
 ./wordpress-backup.sh --help
+
+# Restore a full backup
+./wordpress-backup.sh --restore-full yourdomain.com backup_id
+
+# Restore a database backup
+./wordpress-backup.sh --restore-db yourdomain.com backup_id
+
+# Restore an incremental backup
+./wordpress-backup.sh --restore-inc yourdomain.com backup_id
+
+# List available backups
+./wordpress-backup.sh --list-backups yourdomain.com
+
+# Clean up old backups for all sites
+./wordpress-backup.sh --cleanup-all
+
+# Schedule full backups for all sites
+./wordpress-backup.sh --schedule-full-all "0 2 * * *"
 ```
 
 ## Configuration
@@ -305,10 +326,30 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## Changelog
+
+- **1.1.0** (Current)
+
+  - Added comprehensive restore functionality for all backup types
+  - Added batch operations for all sites at once
+  - Improved site selection in all menu options
+  - Added command-line options for restore operations
+  - Added command-line options for scheduling backups for all sites
+  - Added command-line options for cleaning up all sites
+  - Fixed database restore to use wp-cli instead of direct MySQL commands
+  - Enhanced error handling and reporting
+
+- **1.0.0** (Initial Release)
+  - Full, database-only, and incremental backup support
+  - Multiple notification methods
+  - Configurable compression options
+  - Scheduled backups via cron
+  - Automatic cleanup of old backups
+
 ## Credits
 
 - **Author**: Mayur Chavhan - [GitHub](https://github.com/mayur-chavhan)
-- **Version**: 1.0.0
+- **Version**: 1.1.0
 
 ## Acknowledgments
 

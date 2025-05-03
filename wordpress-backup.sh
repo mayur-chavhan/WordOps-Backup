@@ -807,6 +807,386 @@ cleanup_backups() {
     log_message "Cleanup completed for $site"
 }
 
+# Function to list available backups for a site
+list_available_backups() {
+    local site="$1"
+    local backup_type="$2"
+    local backup_base="$BACKUP_DIR/$site"
+    local backups=()
+    local count=0
+
+    case "$backup_type" in
+    "full")
+        # Find full backups (directories with numeric names)
+        for dir in "$backup_base"/[0-9]*; do
+            if [ -d "$dir" ] && [[ "$(basename "$dir")" =~ ^[0-9]+$ ]]; then
+                # Check if it contains files backup
+                if ls "$dir"/*-files.tar.* &>/dev/null; then
+                    backups+=("$(basename "$dir")")
+                    count=$((count + 1))
+                fi
+            fi
+        done
+        ;;
+    "db")
+        # Find database-only backups
+        for dir in "$backup_base"/[0-9]*-db; do
+            if [ -d "$dir" ]; then
+                backups+=("$(basename "$dir")")
+                count=$((count + 1))
+            fi
+        done
+        # Also include full backups that have database dumps
+        for dir in "$backup_base"/[0-9]*; do
+            if [ -d "$dir" ] && [[ "$(basename "$dir")" =~ ^[0-9]+$ ]]; then
+                if ls "$dir"/*.sql.* &>/dev/null; then
+                    backups+=("$(basename "$dir")")
+                    count=$((count + 1))
+                fi
+            fi
+        done
+        ;;
+    "incremental")
+        # Find incremental backups
+        for dir in "$backup_base/incremental"/[0-9]*; do
+            if [ -d "$dir" ]; then
+                backups+=("$(basename "$dir")")
+                count=$((count + 1))
+            fi
+        done
+        ;;
+    *)
+        # Find all backup types
+        # Full backups
+        for dir in "$backup_base"/[0-9]*; do
+            if [ -d "$dir" ] && [[ "$(basename "$dir")" =~ ^[0-9]+$ ]]; then
+                backups+=("full:$(basename "$dir")")
+                count=$((count + 1))
+            fi
+        done
+        # Database-only backups
+        for dir in "$backup_base"/[0-9]*-db; do
+            if [ -d "$dir" ]; then
+                backups+=("db:$(basename "$dir")")
+                count=$((count + 1))
+            fi
+        done
+        # Incremental backups
+        for dir in "$backup_base/incremental"/[0-9]*; do
+            if [ -d "$dir" ]; then
+                backups+=("incremental:$(basename "$dir")")
+                count=$((count + 1))
+            fi
+        done
+        ;;
+    esac
+
+    # If no backups found
+    if [ $count -eq 0 ]; then
+        echo "No $backup_type backups found for $site"
+        return 1
+    fi
+
+    # Return the list of backups
+    echo "${backups[*]}"
+    return 0
+}
+
+# Function to restore a backup
+restore_backup() {
+    local site="$1"
+    local backup_type="$2"
+    local backup_id="$3"
+    local site_path="/var/www/$site"
+    local htdocs_path="/var/www/$site/htdocs"
+    local backup_dir
+    local restore_start_time
+    local restore_end_time
+    local db_name
+    local db_user
+    local db_password
+    local db_host
+    local wp_config_path="/var/www/$site/wp-config.php"
+    local backup_wp_config
+
+    log_message "Starting $backup_type restore for $site from backup $backup_id..."
+
+    # Determine backup directory based on backup type
+    case "$backup_type" in
+    "full")
+        backup_dir="$BACKUP_DIR/$site/$backup_id"
+        ;;
+    "db")
+        if [[ "$backup_id" == *"-db" ]]; then
+            backup_dir="$BACKUP_DIR/$site/$backup_id"
+        else
+            backup_dir="$BACKUP_DIR/$site/$backup_id"
+        fi
+        ;;
+    "incremental")
+        backup_dir="$BACKUP_DIR/$site/incremental/$backup_id"
+        ;;
+    *)
+        log_message "ERROR: Invalid backup type: $backup_type"
+        return 1
+        ;;
+    esac
+
+    # Check if backup directory exists
+    if [ ! -d "$backup_dir" ]; then
+        log_message "ERROR: Backup directory not found: $backup_dir"
+        return 1
+    fi
+
+    # Get database credentials from wp-config.php
+    if [ -f "$wp_config_path" ]; then
+        db_name=$(grep -oP "(?<=DB_NAME', ')[^']+" "$wp_config_path")
+        db_user=$(grep -oP "(?<=DB_USER', ')[^']+" "$wp_config_path")
+        db_password=$(grep -oP "(?<=DB_PASSWORD', ')[^']+" "$wp_config_path")
+        db_host=$(grep -oP "(?<=DB_HOST', ')[^']+" "$wp_config_path")
+    else
+        # Try to get credentials from backup wp-config.php
+        backup_wp_config=$(find "$backup_dir" -name "wp-config.php" | head -n 1)
+        if [ -n "$backup_wp_config" ]; then
+            db_name=$(grep -oP "(?<=DB_NAME', ')[^']+" "$backup_wp_config")
+            db_user=$(grep -oP "(?<=DB_USER', ')[^']+" "$backup_wp_config")
+            db_password=$(grep -oP "(?<=DB_PASSWORD', ')[^']+" "$backup_wp_config")
+            db_host=$(grep -oP "(?<=DB_HOST', ')[^']+" "$backup_wp_config")
+        else
+            log_message "ERROR: Cannot find wp-config.php in backup or site directory"
+            return 1
+        fi
+    fi
+
+    # Restore based on backup type
+    case "$backup_type" in
+    "full")
+        # Restore files
+        restore_start_time=$(date +%s)
+        log_message "Restoring files from $backup_dir..."
+
+        # Check if site directory exists, create if not
+        if [ ! -d "$site_path" ]; then
+            mkdir -p "$site_path"
+        fi
+
+        # Check if htdocs directory exists, create if not
+        if [ ! -d "$htdocs_path" ]; then
+            mkdir -p "$htdocs_path"
+        fi
+
+        # Find the files backup
+        local files_backup
+        if [ "$COMPRESSION" = "zstd" ]; then
+            files_backup=$(find "$backup_dir" -name "*-files.tar.zst" | head -n 1)
+            if [ -n "$files_backup" ]; then
+                # Extract files
+                tar --zstd -xf "$files_backup" -C "$htdocs_path"
+            else
+                log_message "ERROR: No files backup found in $backup_dir"
+                return 1
+            fi
+        else
+            files_backup=$(find "$backup_dir" -name "*-files.tar.gz" | head -n 1)
+            if [ -n "$files_backup" ]; then
+                # Extract files
+                tar -xzf "$files_backup" -C "$htdocs_path"
+            else
+                log_message "ERROR: No files backup found in $backup_dir"
+                return 1
+            fi
+        fi
+
+        # Restore wp-config.php
+        if [ -f "$backup_dir/wp-config.php" ]; then
+            cp "$backup_dir/wp-config.php" "$site_path/"
+        fi
+
+        restore_end_time=$(date +%s)
+        local files_duration=$((restore_end_time - restore_start_time))
+        log_message "Files restored in $(format_duration $files_duration)"
+
+        # Restore database
+        restore_start_time=$(date +%s)
+        log_message "Restoring database for $site..."
+
+        # Find the database backup
+        local db_backup
+        if [ "$COMPRESSION" = "zstd" ]; then
+            db_backup=$(find "$backup_dir" -name "*.sql.zst" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                zstd -d "$db_backup" -o "${db_backup%.zst}"
+                db_backup="${db_backup%.zst}"
+            else
+                log_message "WARNING: No database backup found in $backup_dir"
+            fi
+        else
+            db_backup=$(find "$backup_dir" -name "*.sql.gz" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                gunzip -c "$db_backup" >"${db_backup%.gz}"
+                db_backup="${db_backup%.gz}"
+            else
+                log_message "WARNING: No database backup found in $backup_dir"
+            fi
+        fi
+
+        if [ -n "$db_backup" ] && [ -f "$db_backup" ]; then
+            # Import database using wp-cli
+            cd "$htdocs_path" || exit
+            export MYSQL_PWD="$db_password" # Export password for wp-cli if needed
+            if ! wp db import "$db_backup" --allow-root; then
+                log_message "ERROR: wp db import failed for $site"
+                # Clean up decompressed SQL file
+                rm "$db_backup"
+                return 1
+            fi
+
+            # Clean up decompressed SQL file
+            rm "$db_backup"
+
+            restore_end_time=$(date +%s)
+            local db_duration=$((restore_end_time - restore_start_time))
+            log_message "Database restored in $(format_duration $db_duration)"
+        fi
+
+        log_message "Full restore completed for $site"
+        ;;
+
+    "db")
+        # Restore database only
+        restore_start_time=$(date +%s)
+        log_message "Restoring database for $site..."
+
+        # Find the database backup
+        local db_backup
+        if [ "$COMPRESSION" = "zstd" ]; then
+            db_backup=$(find "$backup_dir" -name "*.sql.zst" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                zstd -d "$db_backup" -o "${db_backup%.zst}"
+                db_backup="${db_backup%.zst}"
+            else
+                log_message "ERROR: No database backup found in $backup_dir"
+                return 1
+            fi
+        else
+            db_backup=$(find "$backup_dir" -name "*.sql.gz" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                gunzip -c "$db_backup" >"${db_backup%.gz}"
+                db_backup="${db_backup%.gz}"
+            else
+                log_message "ERROR: No database backup found in $backup_dir"
+                return 1
+            fi
+        fi
+
+        # Import database using wp-cli
+        cd "$htdocs_path" || exit
+        export MYSQL_PWD="$db_password" # Export password for wp-cli if needed
+        if ! wp db import "$db_backup" --allow-root; then
+            log_message "ERROR: wp db import failed for $site"
+            # Clean up decompressed SQL file
+            rm "$db_backup"
+            return 1
+        fi
+
+        # Clean up decompressed SQL file
+        rm "$db_backup"
+
+        restore_end_time=$(date +%s)
+        local db_duration=$((restore_end_time - restore_start_time))
+        log_message "Database restored in $(format_duration $db_duration)"
+
+        log_message "Database-only restore completed for $site"
+        ;;
+
+    "incremental")
+        # Restore incremental backup
+        restore_start_time=$(date +%s)
+        log_message "Restoring incremental backup for $site..."
+
+        # Find the incremental files backup
+        local incremental_backup
+        if [ "$COMPRESSION" = "zstd" ]; then
+            incremental_backup=$(find "$backup_dir" -name "*-incremental.tar.zst" | head -n 1)
+            if [ -n "$incremental_backup" ]; then
+                # Extract incremental files
+                tar --zstd -xf "$incremental_backup" -C "/"
+            else
+                log_message "WARNING: No incremental files backup found in $backup_dir"
+            fi
+        else
+            incremental_backup=$(find "$backup_dir" -name "*-incremental.tar.gz" | head -n 1)
+            if [ -n "$incremental_backup" ]; then
+                # Extract incremental files
+                tar -xzf "$incremental_backup" -C "/"
+            else
+                log_message "WARNING: No incremental files backup found in $backup_dir"
+            fi
+        fi
+
+        restore_end_time=$(date +%s)
+        local files_duration=$((restore_end_time - restore_start_time))
+        log_message "Incremental files restored in $(format_duration $files_duration)"
+
+        # Restore database
+        restore_start_time=$(date +%s)
+        log_message "Restoring database for $site..."
+
+        # Find the database backup
+        local db_backup
+        if [ "$COMPRESSION" = "zstd" ]; then
+            db_backup=$(find "$backup_dir" -name "*.sql.zst" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                zstd -d "$db_backup" -o "${db_backup%.zst}"
+                db_backup="${db_backup%.zst}"
+            else
+                log_message "WARNING: No database backup found in $backup_dir"
+            fi
+        else
+            db_backup=$(find "$backup_dir" -name "*.sql.gz" | head -n 1)
+            if [ -n "$db_backup" ]; then
+                # Decompress database dump
+                gunzip -c "$db_backup" >"${db_backup%.gz}"
+                db_backup="${db_backup%.gz}"
+            else
+                log_message "WARNING: No database backup found in $backup_dir"
+            fi
+        fi
+
+        if [ -n "$db_backup" ] && [ -f "$db_backup" ]; then
+            # Import database using wp-cli
+            cd "$htdocs_path" || exit
+            export MYSQL_PWD="$db_password" # Export password for wp-cli if needed
+            if ! wp db import "$db_backup" --allow-root; then
+                log_message "ERROR: wp db import failed for $site"
+                # Clean up decompressed SQL file
+                rm "$db_backup"
+                return 1
+            fi
+
+            # Clean up decompressed SQL file
+            rm "$db_backup"
+
+            restore_end_time=$(date +%s)
+            local db_duration=$((restore_end_time - restore_start_time))
+            log_message "Database restored in $(format_duration $db_duration)"
+        fi
+
+        log_message "Incremental restore completed for $site"
+        ;;
+    esac
+
+    # Send notification
+    send_notification "Restore completed for $site" "restore" "$site" "$backup_dir"
+
+    return 0
+}
+
 # Function to install or update cron jobs
 setup_cron() {
     local site="$1"
@@ -1158,10 +1538,11 @@ show_menu() {
     echo "4. Set up scheduled backups"
     echo "5. Configure backup settings"
     echo "6. Clean up old backups"
-    echo "7. Exit"
+    echo "7. Restore backup"
+    echo "8. Exit"
     echo "==================================================================="
     echo
-    read -p "Enter your choice [1-7]: " choice
+    read -p "Enter your choice [1-8]: " choice
 
     case $choice in
     1)
@@ -1422,6 +1803,93 @@ show_menu() {
         show_menu
         ;;
     7)
+        echo "Restore backup"
+        echo "=============="
+        echo "1. Restore full backup"
+        echo "2. Restore database-only backup"
+        echo "3. Restore incremental backup"
+        read -p "Enter your choice [1-3]: " restore_choice
+
+        # Get list of WordPress sites
+        sites=$(find_wordpress_sites)
+        if [ $? -ne 0 ]; then
+            echo "No WordPress sites found."
+            read -p "Press Enter to continue..."
+            show_menu
+            return
+        fi
+
+        # Display available sites
+        echo "Available WordPress sites:"
+        site_array=($sites)
+        for i in "${!site_array[@]}"; do
+            echo "$((i + 1)). ${site_array[$i]}"
+        done
+
+        # Prompt for site selection
+        read -p "Select site number [1-${#site_array[@]}]: " site_num
+        if [[ "$site_num" =~ ^[0-9]+$ ]] && [ "$site_num" -ge 1 ] && [ "$site_num" -le "${#site_array[@]}" ]; then
+            site="${site_array[$((site_num - 1))]}"
+            if check_wordpress "$site"; then
+                # Determine backup type based on user choice
+                case $restore_choice in
+                1)
+                    backup_type="full"
+                    ;;
+                2)
+                    backup_type="db"
+                    ;;
+                3)
+                    backup_type="incremental"
+                    ;;
+                *)
+                    echo "Invalid backup type selection."
+                    read -p "Press Enter to continue..."
+                    show_menu
+                    return
+                    ;;
+                esac
+
+                # Get available backups for the selected type
+                backups=$(list_available_backups "$site" "$backup_type")
+                if [ $? -ne 0 ]; then
+                    echo "No $backup_type backups found for $site."
+                    read -p "Press Enter to continue..."
+                    show_menu
+                    return
+                fi
+
+                # Display available backups
+                echo "Available $backup_type backups for $site:"
+                backup_array=($backups)
+                for i in "${!backup_array[@]}"; do
+                    echo "$((i + 1)). ${backup_array[$i]}"
+                done
+
+                # Prompt for backup selection
+                read -p "Select backup number [1-${#backup_array[@]}]: " backup_num
+                if [[ "$backup_num" =~ ^[0-9]+$ ]] && [ "$backup_num" -ge 1 ] && [ "$backup_num" -le "${#backup_array[@]}" ]; then
+                    backup_id="${backup_array[$((backup_num - 1))]}"
+
+                    # Confirm restore
+                    echo "WARNING: This will overwrite the current site with the backup data."
+                    read -p "Are you sure you want to restore $site from $backup_type backup $backup_id? (y/n): " confirm
+                    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                        restore_backup "$site" "$backup_type" "$backup_id"
+                    else
+                        echo "Restore cancelled."
+                    fi
+                else
+                    echo "Invalid backup selection."
+                fi
+            fi
+        else
+            echo "Invalid site selection."
+        fi
+        read -p "Press Enter to continue..."
+        show_menu
+        ;;
+    8)
         echo "Exiting..."
         exit 0
         ;;
@@ -1617,6 +2085,111 @@ if [ $# -gt 0 ]; then
         done
         log_message "Scheduled incremental backups set up for all sites."
         ;;
+    --list-backups)
+        if [ -z "$2" ]; then
+            log_message "ERROR: No domain specified for listing backups"
+            log_message "Usage: $0 --list-backups DOMAIN"
+            exit 1
+        fi
+
+        site="$2"
+        if check_wordpress "$site"; then
+            echo "Available backups for $site:"
+            echo "============================"
+            echo "Full backups:"
+            backups=$(list_available_backups "$site" "full")
+            if [ $? -eq 0 ]; then
+                backup_array=($backups)
+                for i in "${!backup_array[@]}"; do
+                    echo "  $((i + 1)). ${backup_array[$i]}"
+                done
+            else
+                echo "  No full backups found"
+            fi
+
+            echo "Database backups:"
+            backups=$(list_available_backups "$site" "db")
+            if [ $? -eq 0 ]; then
+                backup_array=($backups)
+                for i in "${!backup_array[@]}"; do
+                    echo "  $((i + 1)). ${backup_array[$i]}"
+                done
+            else
+                echo "  No database backups found"
+            fi
+
+            echo "Incremental backups:"
+            backups=$(list_available_backups "$site" "incremental")
+            if [ $? -eq 0 ]; then
+                backup_array=($backups)
+                for i in "${!backup_array[@]}"; do
+                    echo "  $((i + 1)). ${backup_array[$i]}"
+                done
+            else
+                echo "  No incremental backups found"
+            fi
+        fi
+        ;;
+    --restore-full)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing domain or backup ID for full backup restore"
+            log_message "Usage: $0 --restore-full DOMAIN BACKUP_ID"
+            exit 1
+        fi
+
+        site="$2"
+        backup_id="$3"
+
+        if check_wordpress "$site"; then
+            echo "WARNING: This will overwrite the current site with the backup data."
+            read -p "Are you sure you want to restore $site from full backup $backup_id? (y/n): " confirm
+            if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                restore_backup "$site" "full" "$backup_id"
+            else
+                echo "Restore cancelled."
+            fi
+        fi
+        ;;
+    --restore-db)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing domain or backup ID for database backup restore"
+            log_message "Usage: $0 --restore-db DOMAIN BACKUP_ID"
+            exit 1
+        fi
+
+        site="$2"
+        backup_id="$3"
+
+        if check_wordpress "$site"; then
+            echo "WARNING: This will overwrite the current database with the backup data."
+            read -p "Are you sure you want to restore $site database from backup $backup_id? (y/n): " confirm
+            if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                restore_backup "$site" "db" "$backup_id"
+            else
+                echo "Restore cancelled."
+            fi
+        fi
+        ;;
+    --restore-inc)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            log_message "ERROR: Missing domain or backup ID for incremental backup restore"
+            log_message "Usage: $0 --restore-inc DOMAIN BACKUP_ID"
+            exit 1
+        fi
+
+        site="$2"
+        backup_id="$3"
+
+        if check_wordpress "$site"; then
+            echo "WARNING: This will apply incremental changes to the current site."
+            read -p "Are you sure you want to restore $site from incremental backup $backup_id? (y/n): " confirm
+            if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                restore_backup "$site" "incremental" "$backup_id"
+            else
+                echo "Restore cancelled."
+            fi
+        fi
+        ;;
     --help)
         echo "Usage: $0 [OPTION] [DOMAIN]"
         echo
@@ -1632,6 +2205,10 @@ if [ $# -gt 0 ]; then
         echo "  --schedule-full-all SCHEDULE       Schedule full backup for all sites"
         echo "  --schedule-db-all SCHEDULE         Schedule database backup for all sites"
         echo "  --schedule-inc-all SCHEDULE        Schedule incremental backup for all sites"
+        echo "  --list-backups DOMAIN              List all backups for DOMAIN"
+        echo "  --restore-full DOMAIN BACKUP_ID    Restore full backup for DOMAIN"
+        echo "  --restore-db DOMAIN BACKUP_ID      Restore database backup for DOMAIN"
+        echo "  --restore-inc DOMAIN BACKUP_ID     Restore incremental backup for DOMAIN"
         echo "  --help               Display this help message"
         echo
         echo "Without options, the script will display an interactive menu."
